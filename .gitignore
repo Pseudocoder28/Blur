@@ -1,0 +1,10 @@
+# Frontend
+node_modules
+frontend/package-lock.json
+
+# Backend
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
