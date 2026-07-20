@@ -18,7 +18,11 @@ In the creator economy, a single mistake can be catastrophic. Streamers, educato
 
 ### Example
 
-![Image](https://github.com/user-attachments/assets/fe0e70b9-c3a6-45fc-b440-4a5b34fc555f)
+Blurr automatically detects and blurs sensitive information in real time—credit cards, ID documents, phone numbers, and more—while keeping the rest of the stream clear.
+
+| Credit card blurred | Phone number blurred | ID document blurred |
+| --- | --- | --- |
+| ![Credit card blurred](assets/examples/example-card-blurred.png) | ![Phone number blurred](assets/examples/example-phone-blurred.png) | ![ID document blurred](assets/examples/example-id-blurred.png) |
 
 ### 🛠️ How we built it
 
