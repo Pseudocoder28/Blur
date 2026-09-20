@@ -1,6 +1,9 @@
 # Frontend
 node_modules
-frontend/package-lock.json
+dist
+.env
+.env.*
+!.env.example
 
 # Backend
 .venv
@@ -8,3 +11,6 @@ venv
 __pycache__
 *.pyc
 .pytest_cache
+
+# OS
+.DS_Store

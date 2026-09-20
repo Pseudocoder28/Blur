@@ -1,12 +1,18 @@
-import cv2
-import numpy as np
 import asyncio
 import threading
-from queue import Queue
+from contextlib import asynccontextmanager
+from pathlib import Path
+from queue import Queue, Empty, Full
+from typing import Literal
+
+import cv2
+import numpy as np
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
+from aiortc.mediastreams import MediaStreamError
 from av import VideoFrame
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from ultralytics import YOLO
 
 # Choose your detection methods
@@ -23,28 +29,53 @@ if TEXT_DETECTION_METHOD == "paddle":
         HAS_PADDLE = False
         TEXT_DETECTION_METHOD = "opencv"
 else:
-    HAS_PADDLE = True
+    HAS_PADDLE = False
 
-app = FastAPI()
+# Resolve the model relative to this file so the server works from any cwd
+YOLO_MODEL_PATH = Path(__file__).resolve().parent / "yolov8n.pt"
 
+# Active peer connections, closed on shutdown
+pcs = set()
+
+
+@asynccontextmanager
+async def lifespan(app):
+    yield
+    await asyncio.gather(*(pc.close() for pc in list(pcs)), return_exceptions=True)
+    pcs.clear()
+
+
+app = FastAPI(lifespan=lifespan)
+
+# The API uses no cookies or auth, so credentials stay disabled with the
+# wildcard origin.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True, 
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 class ObjectDetector:
+    """YOLO wrapper. The model is loaded once and shared by all connections."""
+    _model = None
+    _model_lock = threading.Lock()      # guards lazy loading
+    _inference_lock = threading.Lock()  # YOLO inference is not thread-safe
+
     def __init__(self):
         # Initialize YOLO model with YOLOv8n (smaller, faster model)
-        self.model = YOLO('yolov8n.pt')
-        
+        with ObjectDetector._model_lock:
+            if ObjectDetector._model is None:
+                ObjectDetector._model = YOLO(str(YOLO_MODEL_PATH))
+        self.model = ObjectDetector._model
+
     def detect_objects(self, image):
         """Detect objects in the image using YOLO"""
         try:
             # Run inference
-            results = self.model(image, conf=0.5)  # Confidence threshold of 0.5
+            with ObjectDetector._inference_lock:
+                results = self.model(image, conf=0.5, verbose=False)  # Confidence threshold of 0.5
             detections = []
             
             # Process results
@@ -194,8 +225,12 @@ class VideoProcessingTrack(VideoStreamTrack):
         while self.processing_active:
             try:
                 frame_data = self.detection_queue.get(timeout=0.1)
-                if frame_data is None:  # Shutdown signal
-                    break
+            except Empty:
+                continue
+            if frame_data is None:  # Shutdown signal
+                break
+
+            try:
                 
                 results = {
                     'text_boxes': [],
@@ -213,12 +248,11 @@ class VideoProcessingTrack(VideoStreamTrack):
                     results['object_detections'] = object_detections
                 
                 # Update results
-                if not self.result_queue.full():
-                    try:
-                        self.result_queue.put(results, block=False)
-                    except:
-                        pass
-                            
+                try:
+                    self.result_queue.put(results, block=False)
+                except Full:
+                    pass
+
             except Exception as e:
                 print(f"Detection worker error: {e}")
                 continue
@@ -335,103 +369,128 @@ class VideoProcessingTrack(VideoStreamTrack):
                         result_image = np.where(blur_mask[..., None] == 255, blurred, result_image)
             
             return result_image.astype(np.uint8)
-            
+
         except Exception as e:
             print(f"Blur application error: {e}")
-            return image
+            # Fail closed: never leak an unprocessed frame
+            return self._blur_entire_frame(image)
+
+    def _blur_entire_frame(self, image):
+        return cv2.GaussianBlur(image, (self.blur_strength, self.blur_strength), 0)
     
     async def recv(self):
         try:
             frame = await self.track.recv()
-            img = frame.to_ndarray(format="bgr24")
-            
+        except MediaStreamError:
+            # Source track ended; stop the worker and propagate
+            self.cleanup()
+            raise
+
+        img = frame.to_ndarray(format="bgr24")
+
+        try:
             # Send frame for background detection (non-blocking)
             if self.frame_count % self.detection_interval == 0:
-                if not self.detection_queue.full():
-                    try:
-                        self.detection_queue.put(img.copy(), block=False)
-                    except:
-                        pass
-            
+                try:
+                    self.detection_queue.put(img.copy(), block=False)
+                except Full:
+                    pass
+
             # Get latest detection results (non-blocking)
             try:
-                while not self.result_queue.empty():
+                while True:
                     results = self.result_queue.get_nowait()
                     self.cached_text_boxes = results['text_boxes']
                     self.cached_object_detections = results['object_detections']
-            except:
+            except Empty:
                 pass
-            
+
             # Process frame with detections
             processed_img = self.process_frame(img)
-            
-            self.frame_count += 1
-            
-            # Create new frame
-            new_frame = VideoFrame.from_ndarray(processed_img, format="bgr24")
-            new_frame.pts = frame.pts
-            new_frame.time_base = frame.time_base
-            
-            return new_frame
-            
         except Exception as e:
             print(f"Frame processing error: {e}")
-            # Return original frame on error
-            frame = await self.track.recv()
-            return frame
-    
+            # Fail closed: never forward the original, unblurred frame
+            processed_img = self._blur_entire_frame(img)
+
+        self.frame_count += 1
+
+        # Create new frame
+        new_frame = VideoFrame.from_ndarray(processed_img, format="bgr24")
+        new_frame.pts = frame.pts
+        new_frame.time_base = frame.time_base
+
+        return new_frame
+
     def cleanup(self):
         """Clean up resources"""
         self.processing_active = False
         try:
-            self.detection_queue.put(None, timeout=1)  # Shutdown signal
-        except:
-            pass
+            self.detection_queue.put(None, block=False)  # Shutdown signal
+        except Full:
+            pass  # Worker exits via the processing_active flag instead
 
-# Store active tracks for cleanup
-active_tracks = []
+    def stop(self):
+        self.cleanup()
+        super().stop()
+
+
+class Offer(BaseModel):
+    sdp: str
+    type: Literal["offer"]
+
 
 @app.post("/offer")
-async def offer(request: Request):
+async def offer(params: Offer):
     """Accepts a WebRTC offer and returns an answer with text-blurred video."""
+    offer = RTCSessionDescription(sdp=params.sdp, type=params.type)
+
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+    # Tracks belonging to this connection only
+    processed_tracks = []
+
+    async def close_connection():
+        pcs.discard(pc)
+        for track in processed_tracks:
+            track.cleanup()
+        processed_tracks.clear()
+        await pc.close()
+
+    @pc.on("track")
+    def on_track(track):
+        if track.kind == "video":
+            processed_track = VideoProcessingTrack(
+                track,
+                detection_interval=2,  # Process every 2nd frame
+                blur_strength=41      # Blur strength for text regions
+            )
+            processed_tracks.append(processed_track)
+            pc.addTrack(processed_track)
+
+            @track.on("ended")
+            def on_ended():
+                processed_track.cleanup()
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        if pc.connectionState in ["failed", "closed"]:
+            await close_connection()
+
     try:
-        data = await request.json()
-        offer = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
-
-        pc = RTCPeerConnection()
-
-        @pc.on("track")
-        def on_track(track):
-            if track.kind == "video":
-                processed_track = VideoProcessingTrack(
-                    track, 
-                    detection_interval=2,  # Process every 2nd frame
-                    blur_strength=41      # Blur strength for text regions
-                )
-                active_tracks.append(processed_track)
-                pc.addTrack(processed_track)
-
-        @pc.on("connectionstatechange")
-        async def on_connectionstatechange():
-            if pc.connectionState in ["failed", "closed"]:
-                # Cleanup tracks
-                for track in active_tracks:
-                    if hasattr(track, 'cleanup'):
-                        track.cleanup()
-                active_tracks.clear()
-
         await pc.setRemoteDescription(offer)
+        if not pc.getTransceivers():
+            raise ValueError("offer contains no media")
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
-
-        return {
-            "sdp": pc.localDescription.sdp,
-            "type": pc.localDescription.type,
-        }
-        
     except Exception as e:
         print(f"WebRTC error: {e}")
-        raise
+        await close_connection()
+        raise HTTPException(status_code=400, detail="Invalid WebRTC offer")
+
+    return {
+        "sdp": pc.localDescription.sdp,
+        "type": pc.localDescription.type,
+    }
 
 if __name__ == "__main__":
     import uvicorn

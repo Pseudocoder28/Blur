@@ -2,10 +2,15 @@ fastapi
 uvicorn
 aiortc
 opencv-python
+numpy
 av
+ultralytics
+
+# Testing
 pytest
 pytest-asyncio
 httpx
-easyocr
-paddleocr
-ultralytics
+
+# Optional: only needed when TEXT_DETECTION_METHOD = "paddle" in main.py
+# paddlepaddle
+# paddleocr
