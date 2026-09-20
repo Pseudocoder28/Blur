@@ -17,7 +17,7 @@ This backend is a FastAPI server that receives a WebRTC video stream, detects se
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+ (tested on 3.13)
 - See `requirements.txt` for dependencies:
   - fastapi
   - uvicorn
@@ -37,8 +37,9 @@ This backend is a FastAPI server that receives a WebRTC video stream, detects se
 
 2. **Start the FastAPI server:**
    ```
-   uvicorn main:app --host 0.0.0.0 --port 8000
+   uvicorn main:app --port 8000
    ```
+   This listens on `localhost` only. Add `--host 0.0.0.0` to accept connections from other machines.
 
 3. **Test the endpoint:**
    - Open new terminal to create a beta test server
@@ -61,8 +62,7 @@ This backend is a FastAPI server that receives a WebRTC video stream, detects se
 ## Notes
 
 - The backend currently allows all CORS origins for easy local development.
-- Only video streams are processed; audio is ignored.
+- Only video streams are processed; audio is ignored. The React frontend sends audio directly to the other caller, not through this server.
+- Frames are processed in memory and never written to disk.
 - Detection settings (`TEXT_DETECTION_METHOD`, `ENABLE_OBJECT_DETECTION`, `DEBUG_MODE`) live at the top of `main.py`.
-- The YOLO model is loaded once, on the first connection, and shared by all connections.
-
----
+- The YOLO model is loaded once, on the first connection, and shared by all connections. Detection runs on every second frame and the latest results are reused in between.
