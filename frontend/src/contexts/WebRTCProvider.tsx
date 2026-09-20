@@ -14,6 +14,7 @@ export const WebRTCProvider = ({ children }: { children: React.ReactNode }) => {
 };
 
 // Custom hook to easily consume the context
+// eslint-disable-next-line react-refresh/only-export-components
 export const useWebRTCContext = () => {
   const context = useContext(WebRTCContext);
   if (!context) {

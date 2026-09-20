@@ -13,9 +13,12 @@ import {
   CardTitle,
 } from "../components/ui/card";
 import Background from "../components/Background";
+import { useReturnHomeOnCallEnd } from "../hooks/useReturnHomeOnCallEnd";
 
 const CreateCallPage = () => {
   const { callStatus, callId, createCall, error, hangUp } = useWebRTCContext();
+
+  useReturnHomeOnCallEnd(callStatus);
 
   // Use a ref to track the current status. This gives the cleanup function
   // access to the latest status value without causing the effect to re-run.
@@ -30,9 +33,10 @@ const CreateCallPage = () => {
 
     // The cleanup function will run when the component unmounts.
     return () => {
-      // Only hang up if the user navigates away while the call is still
-      // being created or waiting. This prevents hanging up a connected call.
-      if (statusRef.current === "waiting" || statusRef.current === "creating") {
+      // Hang up if the user navigates away mid-call so the camera is released
+      // and the other peer is notified. (CallPage renders inside this
+      // component, so connecting does not unmount it.)
+      if (statusRef.current !== "idle" && statusRef.current !== "error") {
         hangUp();
       }
     };
