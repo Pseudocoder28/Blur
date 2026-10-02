@@ -6,7 +6,7 @@ _Blurr is a prototype that blurs sensitive content out of a live camera feed bef
 
 ## 🚀 Inspiration
 
-In the creator economy, a single mistake can be catastrophic. Streamers, educators, and professionals live in constant fear of accidentally revealing a password, an API key, a phone number, or a private document during a live broadcast. A split-second error can lead to doxxing, financial loss, and a breach of trust with their audience. Existing solutions are manual and reactive—requiring streamers to use clumsy overlays or simply "be more careful." We knew there had to be a better way: a proactive, intelligent safety net that protects creators without them even thinking about it.
+In the creator economy, a single mistake can be catastrophic. Streamers, educators, and professionals live in constant fear of accidentally revealing a password, an API key, a phone number, or a private document during a live broadcast. A split-second error can lead to doxxing, financial loss, and a breach of trust with their audience. Existing solutions are manual and reactive—requiring streamers to use clumsy overlays or simply "be more careful." I knew there had to be a better way: a proactive, intelligent safety net that protects creators without them even thinking about it.
 
 ## 💡 What it does
 
@@ -31,7 +31,7 @@ Screenshots from the app with a credit card, a phone screen and an ID document h
 | --- | --- | --- |
 | ![Credit card blurred](assets/examples/example-card-blurred.png) | ![Phone screen blurred](assets/examples/example-phone-blurred.png) | ![ID document blurred](assets/examples/example-id-blurred.png) |
 
-## 🛠️ How we built it
+## 🛠️ How I built it
 
 ```
 +----------------+   raw camera video    +------------------------------+
@@ -109,19 +109,19 @@ cd frontend && npm run lint && npm run build
 
 The backend tests run in-process and do not need a running server. There is also a standalone test page, `backend/sample_endpoint.html`, that streams your camera to the backend without the call UI; see [backend/README.md](backend/README.md).
 
-## ⚡ Challenges we ran into
+## ⚡ Challenges I ran into
 
 1.  **Keeping the video real time:** Running YOLO and text detection on every frame would stall the stream. Detection runs in a background thread on every second frame, and the most recent boxes are reused for the frames in between. If the detector is still busy, new frames skip detection rather than wait. The trade-off is that the blur can trail fast movement by a few frames.
 2.  **Earning trust:** A privacy tool that leaks on error is worse than none. Frames are processed in memory and never written to disk, and the pipeline fails closed: if processing a frame throws, the whole frame is blurred instead of being passed through.
 3.  **The accuracy tightrope:** The text detector has to catch a card number held up for a second without blurring every edge in the room. Its size and aspect-ratio thresholds are tuned for that, and a frame that produces 50 or more candidate regions is treated as a false-positive storm and its text results are dropped.
 
-## 🏅 Accomplishments that we're proud of
+## 🏅 Accomplishments that I'm proud of
 
 * **A working end-to-end pipeline:** Camera, server-side detection, and blurred video inside a live two-way call, all in real time.
 * **Region-level blurring:** Only the detected regions are blurred. A single line of text can be redacted while the rest of the frame stays sharp.
 * **The raw camera feed never reaches the other caller:** The camera track sent to the other participant is always the processed one.
 
-## 📚 What we learned
+## 📚 What I learned
 
 * **Detection has to be decoupled from the frame loop:** The video must keep flowing at full rate even when a detection pass takes several frames' worth of time.
 * **Privacy software has to fail closed:** Every error path needs a safe answer, and "send the original frame" is never it.
